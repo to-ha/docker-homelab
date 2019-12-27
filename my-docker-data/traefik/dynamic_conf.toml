@@ -1,0 +1,11 @@
+[http]
+
+  [[tls.certificates]]
+    certFile = "/etc/traefik/localhost.crt"
+    keyFile = "/etc/traefik/localhost.key"
+
+  [tls.stores]
+    [tls.stores.default]
+      [tls.stores.default.defaultCertificate]
+        certFile = "/etc/traefik/localhost.crt"
+        keyFile = "/etc/traefik/localhost.key"

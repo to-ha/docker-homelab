@@ -1,0 +1,24 @@
+[log]
+  filePath = "/etc/traefik/log/traefik.log"
+  level = "ERROR"
+
+[entryPoints]
+  [entryPoints.http]
+    address = ":80"
+
+  [entryPoints.https]
+    address = ":443"
+
+[api]
+  dashboard = true
+  insecure = true
+
+[providers]
+  [providers.docker]
+    endpoint = "unix:///var/run/docker.sock"
+    watch = true
+    exposedbydefault = false
+
+  [providers.file]
+    filename = "/etc/traefik/dynamic_conf.toml"
+    watch = true

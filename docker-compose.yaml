@@ -1,0 +1,157 @@
+version: '3.7'
+
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: always
+    networks:
+      - traefik_proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${MY_DOCKER_DATA_DIR}/traefik:/etc/traefik
+      - ${MY_DOCKER_DATA_DIR}/traefik/dynamic_conf.toml:/etc/traefik/dynamic_conf.toml
+    ports:
+      - 80:80
+      - 443:443
+      - 8080:8080
+    labels:
+      - "traefik.http.routers.redirs.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.redirs.entrypoints=http"
+      - "traefik.http.routers.redirs.middlewares=redirect-to-https"
+
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+
+  whoami:
+    image: containous/whoami
+    container_name: whoami
+    restart: unless-stopped
+    networks:
+      - traefik_proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+
+      - "traefik.http.routers.whoami-https.entrypoints=https"
+      - "traefik.http.routers.whoami-https.tls=true"
+      - "traefik.http.routers.whoami-https.rule=PathPrefix(`/whoami`)"
+      - "traefik.http.routers.whoami-https.middlewares=whoami-strip-prefix@docker"
+
+      - "traefik.http.routers.whoami.entrypoints=http"
+      - "traefik.http.routers.whoami.rule=PathPrefix(`/whoami`)"
+      - "traefik.http.routers.whoami.middlewares=whoami-strip-prefix@docker"
+
+      - "traefik.http.middlewares.whoami-strip-prefix.stripprefix.prefixes=/whoami"
+
+  mon_node-exporter:
+    image: prom/node-exporter:latest
+    container_name: mon_node-exporter
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host:ro,rslave
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.ignored-mount-points="^(/rootfs|/host|)/(sys|proc|dev|host|etc)($$|/)"'
+      - '--collector.filesystem.ignored-fs-types="^(sys|proc|auto|cgroup|devpts|ns|au|fuse\.lxc|mqueue)(fs|)$$"'
+
+  mon_prometheus:
+    image: prom/prometheus:latest
+    container_name: mon_prometheus
+    restart: unless-stopped 
+    networks:
+      - traefik_proxy
+      - backend
+    volumes:
+      - ${MY_DOCKER_DATA_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - mon_prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - mon_node-exporter
+
+  mon_grafana:
+    image: grafana/grafana:latest
+    container_name: mon_grafana
+    restart: unless-stopped
+    networks:
+      - traefik_proxy
+    volumes:
+      - mon_grafana_data:/var/lib/grafana
+    environment:
+      - GF_SERVER_ROOT_URL=http://localhost:3000/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_SERVER_ENABLE_GZIP=true
+    user: "0"
+    depends_on:
+      - mon_prometheus
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.entrypoints=http"
+      - "traefik.http.routers.grafana.rule=PathPrefix(`/grafana`)"
+
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+  mon_cadvisor:
+    image: google/cadvisor:latest
+    container_name: mon_cadvisor
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+
+  mon_influxdb_collectd:
+    build: influxdb-collectd
+    container_name: mon_influxdb_collectd
+    restart: unless-stopped
+    networks:
+      - traefik_proxy
+    ports:
+      - 8086:8086
+    volumes:
+      - ${MY_DOCKER_DATA_DIR}/influxdb-collectd/influxdb.conf:/etc/influxdb/influxdb.conf:ro
+      - mon_influxdb_collectd_data:/var/lib/influxdb
+    environment:
+      - INFLUXDB_DB=collectd
+      - INFLUXDB_REPORTING_DISABLED=true
+      - INFLUXDB_DATA_QUERY_LOG_ENABLED=false
+
+  mon_fritzcollectd:
+    build: fritzcollectd-build-docker
+    container_name: mon_fritzcollectd
+    restart: unless-stopped
+    networks:
+      - traefik_proxy
+    ports:
+      - 25826:25826
+    volumes:
+      - ${MY_DOCKER_DATA_DIR}/fritzcollectd-docker/collectd.conf:/etc/collectd/collectd.conf
+      - ${MY_DOCKER_DATA_DIR}/fritzcollectd-docker/log:/var/log
+    user: "0"
+    depends_on:
+      - mon_influxdb_collectd
+
+volumes:
+  mon_prometheus_data:
+    driver: local
+  mon_grafana_data:
+    driver: local
+  mon_influxdb_collectd_data:
+    driver: local
+
+networks:
+  traefik_proxy:
+    external: true
+  backend:
+    name: backend
+  default:
+    name: backend
